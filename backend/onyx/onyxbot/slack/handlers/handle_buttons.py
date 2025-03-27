@@ -1,8 +1,10 @@
 import json
 from typing import Any
+from typing import Optional
 from typing import cast
 
 from slack_sdk import WebClient
+from onyx.onyxbot.slack.handlers.langfuse_utils import safe_trace, log_user_feedback
 from slack_sdk.models.blocks import SectionBlock
 from slack_sdk.models.views import View
 from slack_sdk.socket_mode.request import SocketModeRequest
@@ -359,6 +361,10 @@ def handle_publish_ephemeral_message_button(
             logger.error(f"Failed to send webhook: {e}")
 
 
+@safe_trace(
+    name="handle_slack_feedback",
+    tags=["slack", "feedback"],
+)
 def handle_slack_feedback(
     feedback_id: str,
     feedback_type: str,
@@ -379,13 +385,26 @@ def handle_slack_feedback(
     with get_session_with_current_tenant() as db_session:
         onyx_user = get_user_by_email(email, db_session) if email else None
         if feedback_type in [LIKE_BLOCK_ACTION_ID, DISLIKE_BLOCK_ACTION_ID]:
+            is_positive = feedback_type == LIKE_BLOCK_ACTION_ID
             create_chat_message_feedback(
-                is_positive=feedback_type == LIKE_BLOCK_ACTION_ID,
+                is_positive=is_positive,
                 feedback_text="",
                 chat_message_id=message_id,
                 user_id=onyx_user.id if onyx_user else None,
                 db_session=db_session,
             )
+            
+            # Log user feedback to Langfuse
+            log_user_feedback(
+                trace_id=message_id,  # Use message_id as trace_id
+                is_positive=is_positive,
+                metadata={
+                    "feedback_type": feedback_type,
+                    "user_id": user_id_to_post_confirmation,
+                    "channel_id": channel_id_to_post_confirmation,
+                }
+            )
+            
             remove_scheduled_feedback_reminder(
                 client=client,
                 channel=user_id_to_post_confirmation,
@@ -406,6 +425,7 @@ def handle_slack_feedback(
             else:
                 feedback = SearchFeedbackType.HIDE
 
+            is_positive = feedback_type == SearchFeedbackType.ENDORSE.value
             create_doc_retrieval_feedback(
                 message_id=message_id,
                 document_id=doc_id,
@@ -413,6 +433,18 @@ def handle_slack_feedback(
                 db_session=db_session,
                 clicked=False,  # Not tracking this for Slack
                 feedback=feedback,
+            )
+            
+            # Log document feedback to Langfuse
+            log_user_feedback(
+                trace_id=message_id,  # Use message_id as trace_id
+                is_positive=is_positive,
+                feedback_text=feedback_type,
+                metadata={
+                    "feedback_type": feedback_type,
+                    "document_id": doc_id,
+                    "document_rank": doc_rank,
+                }
             )
         else:
             logger.error(f"Feedback type '{feedback_type}' not supported")

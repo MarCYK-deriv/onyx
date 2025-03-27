@@ -1,9 +1,11 @@
 import datetime
+from typing import Optional
 
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from onyx.configs.onyxbot_configs import DANSWER_BOT_FEEDBACK_REMINDER
+from onyx.onyxbot.slack.handlers.langfuse_utils import create_trace_for_message, safe_trace
 from onyx.configs.onyxbot_configs import DANSWER_REACT_EMOJI
 from onyx.db.engine import get_session_with_current_tenant
 from onyx.db.models import SlackChannelConfig
@@ -104,11 +106,16 @@ def remove_scheduled_feedback_reminder(
             )
 
 
+@safe_trace(
+    name="handle_message",
+    tags=["slack", "message_handler"],
+)
 def handle_message(
     message_info: SlackMessageInfo,
     slack_channel_config: SlackChannelConfig,
     client: WebClient,
     feedback_reminder_id: str | None,
+    trace_id: Optional[str] = None,
 ) -> bool:
     """Potentially respond to the user message depending on filters and if an answer was generated
 
@@ -120,6 +127,9 @@ def handle_message(
     channel = message_info.channel_to_respond
 
     logger = setup_logger(extra={SLACK_CHANNEL_ID: channel})
+
+    # Create a trace for this message handling
+    trace_id = create_trace_for_message(message_info, client=client)
 
     messages = message_info.thread_messages
     sender_id = message_info.sender_id
@@ -230,6 +240,7 @@ def handle_message(
             logger=logger,
             client=client,
             db_session=db_session,
+            trace_id=trace_id,  # Pass trace_id
         )
         if used_standard_answer:
             return False
@@ -243,5 +254,6 @@ def handle_message(
             channel=channel,
             logger=logger,
             feedback_reminder_id=feedback_reminder_id,
+            trace_id=trace_id,  # Pass trace_id
         )
         return issue_with_regular_answer

@@ -5,6 +5,7 @@ from typing import Optional
 from typing import TypeVar
 
 from retry import retry
+from onyx.onyxbot.slack.handlers.langfuse_utils import safe_trace, log_llm_call, log_retrieval
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import SectionBlock
 
@@ -24,6 +25,7 @@ from onyx.context.search.enums import OptionalSearchSetting
 from onyx.context.search.models import BaseFilters
 from onyx.context.search.models import RetrievalDetails
 from onyx.db.engine import get_session_with_current_tenant
+from onyx.db.llm import fetch_default_provider
 from onyx.db.models import SlackChannelConfig
 from onyx.db.models import User
 from onyx.db.persona import get_persona_by_id
@@ -36,6 +38,7 @@ from onyx.onyxbot.slack.models import SlackMessageInfo
 from onyx.onyxbot.slack.utils import respond_in_thread_or_channel
 from onyx.onyxbot.slack.utils import SlackRateLimiter
 from onyx.onyxbot.slack.utils import update_emote_react
+from onyx.onyxbot.slack.utils import get_user_email
 from onyx.server.query_and_chat.models import CreateChatMessageRequest
 from onyx.utils.logger import OnyxLoggingAdapter
 
@@ -63,6 +66,10 @@ def rate_limits(
     return decorator
 
 
+@safe_trace(
+    name="handle_regular_answer",
+    tags=["slack", "regular_answer"],
+)
 def handle_regular_answer(
     message_info: SlackMessageInfo,
     slack_channel_config: SlackChannelConfig,
@@ -71,6 +78,7 @@ def handle_regular_answer(
     channel: str,
     logger: OnyxLoggingAdapter,
     feedback_reminder_id: str | None,
+    trace_id: Optional[str] = None,
     num_retries: int = DANSWER_BOT_NUM_RETRIES,
     thread_context_percent: float = MAX_THREAD_CONTEXT_PERCENTAGE,
     should_respond_with_error_msgs: bool = DANSWER_BOT_DISPLAY_ERROR_MSGS,
@@ -235,6 +243,54 @@ def handle_regular_answer(
             )
 
         answer = _get_slack_answer(new_message_request=answer_request, onyx_user=user)
+        
+        # Log LLM call to Langfuse
+        if trace_id and answer.answer:
+            # Extract model information if available
+            model_name = None
+            model_provider = None
+            
+            # Get model info from persona
+            if persona:
+                model_name = persona.llm_model_version_override
+                model_provider = persona.llm_model_provider_override
+                
+            # If no override in persona, get default model info
+            if not model_name:
+                with get_session_with_current_tenant() as db_session:
+                    default_provider = fetch_default_provider(db_session)
+                    if default_provider:
+                        model_name = default_provider.default_model_name
+                        model_provider = default_provider.name
+            
+            # Create metadata with model info
+            metadata = {
+                "model_name": model_name or "unknown",
+                "model_provider": model_provider or "default",
+                "is_ephemeral": send_as_ephemeral,
+                "is_bot_dm": message_info.is_bot_dm,
+                "persona_name": persona.name,
+                "persona_id": persona.id,
+            }
+            
+            # Log the LLM call
+            log_llm_call(
+                trace_id=trace_id,
+                model=f"{model_provider or 'default'}/{model_name or 'unknown'}",
+                prompt=user_message.message,
+                completion=answer.answer,
+                metadata=metadata,
+            )
+            
+            # Also log any retrieved docs if available
+            if answer.citations:
+                doc_titles = [citation.document_title for citation in answer.citations]
+                log_retrieval(
+                    trace_id=trace_id,
+                    query=user_message.message,
+                    documents=doc_titles,
+                    metadata={"model": f"{model_provider or 'default'}/{model_name or 'unknown'}"},
+                )
 
     except Exception as e:
         logger.exception(

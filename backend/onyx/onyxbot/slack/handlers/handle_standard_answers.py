@@ -1,7 +1,10 @@
+from typing import Optional
+
 from slack_sdk import WebClient
 from sqlalchemy.orm import Session
 
 from onyx.db.models import Prompt
+from onyx.onyxbot.slack.handlers.langfuse_utils import safe_trace
 from onyx.db.models import SlackChannelConfig
 from onyx.onyxbot.slack.models import SlackMessageInfo
 from onyx.utils.logger import OnyxLoggingAdapter
@@ -11,6 +14,10 @@ from onyx.utils.variable_functionality import fetch_versioned_implementation
 logger = setup_logger()
 
 
+@safe_trace(
+    name="handle_standard_answers",
+    tags=["slack", "standard_answers"],
+)
 def handle_standard_answers(
     message_info: SlackMessageInfo,
     receiver_ids: list[str] | None,
@@ -19,6 +26,7 @@ def handle_standard_answers(
     logger: OnyxLoggingAdapter,
     client: WebClient,
     db_session: Session,
+    trace_id: Optional[str] = None,
 ) -> bool:
     """Returns whether one or more Standard Answer message blocks were
     emitted by the Slack bot"""
@@ -34,9 +42,14 @@ def handle_standard_answers(
         logger=logger,
         client=client,
         db_session=db_session,
+        trace_id=trace_id,
     )
 
 
+@safe_trace(
+    name="_handle_standard_answers",
+    tags=["slack", "standard_answers", "ee_fallback"],
+)
 def _handle_standard_answers(
     message_info: SlackMessageInfo,
     receiver_ids: list[str] | None,
@@ -45,6 +58,7 @@ def _handle_standard_answers(
     logger: OnyxLoggingAdapter,
     client: WebClient,
     db_session: Session,
+    trace_id: Optional[str] = None,
 ) -> bool:
     """
     Standard Answers are a paid Enterprise Edition feature. This is the fallback

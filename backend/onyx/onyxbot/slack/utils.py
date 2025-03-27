@@ -425,7 +425,6 @@ def fetch_slack_user_ids_from_emails(
 
     return user_ids, failed_to_find
 
-
 def fetch_user_ids_from_groups(
     given_names: list[str], client: WebClient
 ) -> tuple[list[str], list[str]]:
@@ -511,6 +510,30 @@ def fetch_user_semantic_id_from_id(
         or user.get("name")
         or user.get("profile", {}).get("email")
     )
+
+
+def get_user_email(user_id: str | None, client: WebClient) -> str | None:
+    """
+    Get the user's email from their Slack user ID.
+    
+    Args:
+        user_id: The Slack user ID
+        client: The Slack client
+        
+    Returns:
+        The user's email address or None if not found
+    """
+    if not user_id:
+        return None
+        
+    try:
+        response = make_slack_api_rate_limited(client.users_info)(user=user_id)
+        if not response["ok"]:
+            return None
+            
+        return response.data["user"]["profile"].get("email")
+    except Exception:
+        return None
 
 
 def read_slack_thread(
