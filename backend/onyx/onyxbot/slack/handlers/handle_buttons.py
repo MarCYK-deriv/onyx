@@ -4,7 +4,7 @@ from typing import Optional
 from typing import cast
 
 from slack_sdk import WebClient
-from onyx.onyxbot.slack.handlers.langfuse_utils import safe_trace, log_user_feedback
+from backend.onyx.onyxbot.slack.handlers.langfuse.langfuse_utils import safe_trace, log_user_feedback
 from slack_sdk.models.blocks import SectionBlock
 from slack_sdk.models.views import View
 from slack_sdk.socket_mode.request import SocketModeRequest

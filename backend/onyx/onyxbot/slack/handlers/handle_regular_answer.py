@@ -5,7 +5,7 @@ from typing import Optional
 from typing import TypeVar
 
 from retry import retry
-from onyx.onyxbot.slack.handlers.langfuse_utils import safe_trace, log_llm_call, log_retrieval
+from backend.onyx.onyxbot.slack.handlers.langfuse.langfuse_utils import safe_trace, log_llm_call, log_retrieval
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import SectionBlock
 

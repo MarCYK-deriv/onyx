@@ -4,7 +4,7 @@ from slack_sdk import WebClient
 from sqlalchemy.orm import Session
 
 from onyx.db.models import Prompt
-from onyx.onyxbot.slack.handlers.langfuse_utils import safe_trace
+from backend.onyx.onyxbot.slack.handlers.langfuse.langfuse_utils import safe_trace
 from onyx.db.models import SlackChannelConfig
 from onyx.onyxbot.slack.models import SlackMessageInfo
 from onyx.utils.logger import OnyxLoggingAdapter
