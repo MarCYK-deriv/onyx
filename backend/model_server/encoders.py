@@ -45,6 +45,10 @@ from shared_configs.model_server_models import RerankRequest
 from shared_configs.model_server_models import RerankResponse
 from shared_configs.utils import batch_list
 
+# testing langfuse encoding
+from langfuse.openai import AsyncOpenAI as LangfuseAsyncOpenAI
+import os
+
 
 logger = setup_logger()
 
@@ -133,6 +137,10 @@ class CloudEmbedding:
         self.timeout = timeout
         self.http_client = httpx.AsyncClient(timeout=timeout)
         self._closed = False
+        
+        self.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+        self.langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+        self.langfuse_host = os.getenv("LANGFUSE_HOST")
 
     async def _embed_openai(
         self, texts: list[str], model: str | None, reduced_dimension: int | None
@@ -141,9 +149,17 @@ class CloudEmbedding:
             model = DEFAULT_OPENAI_MODEL
 
         # Use the OpenAI specific timeout for this one
-        client = openai.AsyncOpenAI(
-            api_key=self.api_key, timeout=OPENAI_EMBEDDING_TIMEOUT
+        client = LangfuseAsyncOpenAI(
+            api_key=self.api_key, 
+            timeout=OPENAI_EMBEDDING_TIMEOUT,
+            langfuse_public_key=self.langfuse_public_key,
+            langfuse_secret_key=self.langfuse_secret_key,
+            langfuse_host=self.langfuse_host,
         )
+        
+        # client = openai.AsyncOpenAI(
+        #     api_key=self.api_key, timeout=OPENAI_EMBEDDING_TIMEOUT
+        # )
 
         final_embeddings: list[Embedding] = []
 
