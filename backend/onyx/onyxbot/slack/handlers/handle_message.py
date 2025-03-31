@@ -5,7 +5,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
 from onyx.configs.onyxbot_configs import DANSWER_BOT_FEEDBACK_REMINDER
-from backend.onyx.onyxbot.slack.handlers.langfuse.langfuse_utils import create_trace_for_message, safe_trace
+from backend.onyx.onyxbot.slack.handlers.langfuse.utils import create_trace_for_message, safe_trace
 from onyx.configs.onyxbot_configs import DANSWER_REACT_EMOJI
 from onyx.db.engine import get_session_with_current_tenant
 from onyx.db.models import SlackChannelConfig
