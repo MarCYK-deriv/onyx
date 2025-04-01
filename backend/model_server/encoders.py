@@ -7,7 +7,6 @@ from typing import Optional
 
 import aioboto3  # type: ignore
 import httpx
-import openai
 import vertexai  # type: ignore
 import voyageai  # type: ignore
 from cohere import AsyncClient as CohereAsyncClient
@@ -45,8 +44,10 @@ from shared_configs.model_server_models import RerankRequest
 from shared_configs.model_server_models import RerankResponse
 from shared_configs.utils import batch_list
 
-# testing langfuse encoding
-from langfuse.openai import AsyncOpenAI as LangfuseAsyncOpenAI
+# langfuse logging
+from onyx.utils.langfuse import embed_with_langfuse
+from langfuse.decorators import langfuse_context
+from langfuse.openai import openai
 import os
 
 
@@ -137,42 +138,81 @@ class CloudEmbedding:
         self.timeout = timeout
         self.http_client = httpx.AsyncClient(timeout=timeout)
         self._closed = False
-        
+
         self.langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
         self.langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
         self.langfuse_host = os.getenv("LANGFUSE_HOST")
 
     async def _embed_openai(
-        self, texts: list[str], model: str | None, reduced_dimension: int | None
+        self, texts: list[str], model: str | None, reduced_dimension: int | None, trace_id: Optional[str] = None
     ) -> list[Embedding]:
         if not model:
             model = DEFAULT_OPENAI_MODEL
 
-        # Use the OpenAI specific timeout for this one
-        client = LangfuseAsyncOpenAI(
-            api_key=self.api_key, 
+        client = openai.AsyncOpenAI(
+            api_key=self.api_key,
             timeout=OPENAI_EMBEDDING_TIMEOUT,
-            langfuse_public_key=self.langfuse_public_key,
-            langfuse_secret_key=self.langfuse_secret_key,
-            langfuse_host=self.langfuse_host,
         )
-        
-        # client = openai.AsyncOpenAI(
-        #     api_key=self.api_key, timeout=OPENAI_EMBEDDING_TIMEOUT
-        # )
 
         final_embeddings: list[Embedding] = []
 
         for text_batch in batch_list(texts, _OPENAI_MAX_INPUT_LEN):
+            # Pass the trace_id in headers if provided
+            headers = {}
+            if trace_id:
+                headers["X-Langfuse-Trace-Id"] = trace_id
+
             response = await client.embeddings.create(
                 input=text_batch,
                 model=model,
                 dimensions=reduced_dimension or openai.NOT_GIVEN,
+                extra_headers=headers
             )
+
+            # Log embedding batch metrics if we're in a Langfuse context
+            try:
+                if langfuse_context.current_observation():
+                    langfuse_context.current_observation().add_event(
+                        name="embedding_batch",
+                        metadata={
+                            "batch_size": len(text_batch),
+                            "model": model,
+                            "token_count": response.usage.total_tokens if hasattr(response, "usage") else None
+                        }
+                    )
+            except (AttributeError, TypeError):
+                # Handle the case where there's no current observation
+                pass
+
             final_embeddings.extend(
                 [embedding.embedding for embedding in response.data]
             )
+
         return final_embeddings
+
+# ===============REPLACED WITH LANGFUSE EMBEDDING===============
+    # async def _embed_openai(
+    #     self, texts: list[str], model: str | None, reduced_dimension: int | None
+    # ) -> list[Embedding]:
+    #     if not model:
+    #         model = DEFAULT_OPENAI_MODEL
+
+    #     client = openai.AsyncOpenAI(
+    #         api_key=self.api_key, timeout=OPENAI_EMBEDDING_TIMEOUT
+    #     )
+
+    #     final_embeddings: list[Embedding] = []
+
+    #     for text_batch in batch_list(texts, _OPENAI_MAX_INPUT_LEN):
+    #         response = await client.embeddings.create(
+    #             input=text_batch,
+    #             model=model,
+    #             dimensions=reduced_dimension or openai.NOT_GIVEN,
+    #         )
+    #         final_embeddings.extend(
+    #             [embedding.embedding for embedding in response.data]
+    #         )
+    #     return final_embeddings
 
     async def _embed_cohere(
         self, texts: list[str], model: str | None, embedding_type: str
@@ -245,7 +285,7 @@ class CloudEmbedding:
         # Split into batches of 25 texts
         max_texts_per_batch = VERTEXAI_EMBEDDING_LOCAL_BATCH_SIZE
         batches = [
-            inputs[i : i + max_texts_per_batch]
+            inputs[i: i + max_texts_per_batch]
             for i in range(0, len(inputs), max_texts_per_batch)
         ]
 
@@ -263,10 +303,12 @@ class CloudEmbedding:
         self, texts: list[str], model_name: str | None
     ) -> list[Embedding]:
         if not model_name:
-            raise ValueError("Model name is required for LiteLLM proxy embedding.")
+            raise ValueError(
+                "Model name is required for LiteLLM proxy embedding.")
 
         if not self.api_url:
-            raise ValueError("API URL is required for LiteLLM proxy embedding.")
+            raise ValueError(
+                "API URL is required for LiteLLM proxy embedding.")
 
         headers = (
             {} if not self.api_key else {"Authorization": f"Bearer {self.api_key}"}
@@ -296,13 +338,20 @@ class CloudEmbedding:
     ) -> list[Embedding]:
         try:
             if self.provider == EmbeddingProvider.OPENAI:
-                return await self._embed_openai(texts, model_name, reduced_dimension)
+                return await embed_with_langfuse(
+                    texts=texts, 
+                    model=model_name, 
+                    reduced_dimension=reduced_dimension,
+                    api_key=self.api_key,
+                    timeout=self.timeout
+                )
             elif self.provider == EmbeddingProvider.AZURE:
                 return await self._embed_azure(texts, f"azure/{deployment_name}")
             elif self.provider == EmbeddingProvider.LITELLM:
                 return await self._embed_litellm_proxy(texts, model_name)
 
-            embedding_type = EmbeddingModelTextType.get_type(self.provider, text_type)
+            embedding_type = EmbeddingModelTextType.get_type(
+                self.provider, text_type)
             if self.provider == EmbeddingProvider.COHERE:
                 return await self._embed_cohere(texts, model_name, embedding_type)
             elif self.provider == EmbeddingProvider.VOYAGE:
@@ -452,7 +501,8 @@ async def embed_text(
             raise RuntimeError("API key not provided for cloud model")
 
         if prefix:
-            logger.warning("Prefix provided for cloud model, which is not supported")
+            logger.warning(
+                "Prefix provided for cloud model, which is not supported")
             raise ValueError(
                 "Prefix string is not valid for cloud models. "
                 "Cloud models take an explicit text type instead."
@@ -492,7 +542,8 @@ async def embed_text(
             f"Embedding {len(texts)} texts with {total_chars} total characters with local model: {model_name}"
         )
 
-        prefixed_texts = [f"{prefix}{text}" for text in texts] if prefix else texts
+        prefixed_texts = [
+            f"{prefix}{text}" for text in texts] if prefix else texts
 
         local_model = get_embedding_model(
             model_name=model_name, max_context_length=max_context_length
@@ -537,7 +588,8 @@ async def local_rerank(query: str, docs: list[str], model_name: str) -> list[flo
     # Run CPU-bound reranking in a thread pool
     return await asyncio.get_event_loop().run_in_executor(
         None,
-        lambda: cross_encoder.predict([(query, doc) for doc in docs]).tolist(),  # type: ignore
+        lambda: cross_encoder.predict(
+            [(query, doc) for doc in docs]).tolist(),  # type: ignore
     )
 
 
@@ -678,7 +730,8 @@ async def process_embed_request(
 async def process_rerank_request(rerank_request: RerankRequest) -> RerankResponse:
     """Cross encoders can be purely black box from the app perspective"""
     if INDEXING_ONLY:
-        raise RuntimeError("Indexing model server should not call intent endpoint")
+        raise RuntimeError(
+            "Indexing model server should not call intent endpoint")
 
     if not rerank_request.documents or not rerank_request.query:
         raise HTTPException(
@@ -736,7 +789,8 @@ async def process_rerank_request(rerank_request: RerankRequest) -> RerankRespons
             )
             return RerankResponse(scores=sim_scores)
         else:
-            raise ValueError(f"Unsupported provider: {rerank_request.provider_type}")
+            raise ValueError(
+                f"Unsupported provider: {rerank_request.provider_type}")
 
     except Exception as e:
         logger.exception(f"Error during reranking process:\n{str(e)}")

@@ -16,3 +16,5 @@ voyageai==0.2.3
 litellm==1.61.16
 sentry-sdk[fastapi,celery,starlette]==2.14.0
 aioboto3==13.4.0
+langfuse
+supabase
